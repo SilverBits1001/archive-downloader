@@ -7,6 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	// injects Mozilla root certs into the process so TLS verification
+	// works on devices with no system CA store (covers gabagool's
+	// DownloadManager too, which uses its own HTTP client)
+	_ "github.com/BrandonKowalski/certifiable"
+
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
 )
 
