@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +35,20 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           tail -80 build.log >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish build log to repo (on failure)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tail -200 build.log > last-build.log
+          B64=$(base64 -w0 last-build.log)
+          SHA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/logs/last-build.log?ref=main" \
+            | grep -m1 '"sha"' | sed 's/.*"sha": "//;s/".*//')
+          curl -s -X PUT -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/logs/last-build.log" \
+            -d "{\"message\":\"build log [skip ci]\",\"content\":\"$B64\"${SHA:+,\"sha\":\"$SHA\"}}" >/dev/null
 
       - name: Assemble pak
         run: |

@@ -208,7 +208,12 @@ func downloadFiles(cfg *Config, id string, platform *Platform, chosen []FileEntr
 		SkipSSLVerification: insecureMode,
 	})
 	if err != nil {
-		if !errors.Is(err, gaba.ErrCancelled) {
+		if errors.Is(err, gaba.ErrCancelled) {
+			// don't leave partial files behind on cancel
+			for _, d := range downloads {
+				os.Remove(d.Location)
+			}
+		} else {
 			showError("Download failed:\n" + friendlyError(err))
 		}
 		return
