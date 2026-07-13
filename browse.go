@@ -42,15 +42,17 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 	fs := newFilterState(platform)
 	search := ""
 	selectedIndex := 0
+	multiMode := false // toggled by Select; drives which footer/controls show
 
 	for {
 		visible := applySearch(fs.apply(files), search)
 		filtered := len(visible) != len(files)
 
-		// one optional pinned row (refresh), then one row per file
+		// one optional pinned row (refresh), then one row per file.
+		// the refresh row is hidden in multi-select so indices stay clean.
 		var items []gaba.MenuItem
 		nControls := 0
-		if fromCache {
+		if fromCache && !multiMode {
 			items = append(items, gaba.MenuItem{Text: ">> Refresh file list  (cached)", NotMultiSelectable: true})
 			nControls = 1
 		}
@@ -62,43 +64,67 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 		}
 
 		title := id
-		if filtered {
+		if multiMode {
+			title = "Select files - " + id
+		} else if filtered {
 			title = fmt.Sprintf("%s  (%d of %d)", id, len(visible), len(files))
 		}
 		opts := gaba.DefaultListOptions(title, items)
 		opts.SelectedIndex = selectedIndex
-		opts.EmptyMessage = "No files match - press Y to change search"
-		// X opens filters, Y opens search, Select toggles multi-select,
-		// Start confirms the multi-selection as a download queue
-		opts.ActionButton = constants.VirtualButtonX
-		opts.SecondaryActionButton = constants.VirtualButtonY
-		opts.MultiSelectButton = constants.VirtualButtonSelect
-		opts.MultiSelectConfirmButton = constants.VirtualButtonStart
-		opts.SelectAllButton = constants.VirtualButtonL1
-		opts.DeselectAllButton = constants.VirtualButtonR1
-		opts.FooterHelpItems = []gaba.FooterHelpItem{
-			{ButtonName: "A", HelpText: "Download"},
-			{ButtonName: "X", HelpText: "Filters"},
-			{ButtonName: "Y", HelpText: "Search"},
-			{ButtonName: "Select", HelpText: "Multi"},
-			{ButtonName: "B", HelpText: "Back"},
+		// Select always toggles multi-select mode (tertiary action returns
+		// control here so we can flip modes and redraw the right footer).
+		opts.TertiaryActionButton = constants.VirtualButtonSelect
+		if multiMode {
+			opts.InitialMultiSelectMode = true
+			opts.MultiSelectConfirmButton = constants.VirtualButtonStart
+			opts.SelectAllButton = constants.VirtualButtonL1
+			opts.DeselectAllButton = constants.VirtualButtonR1
+			opts.EmptyMessage = "No files"
+			opts.FooterHelpItems = []gaba.FooterHelpItem{
+				{ButtonName: "A", HelpText: "Select"},
+				{ButtonName: "L1/R1", HelpText: "All/None"},
+				{ButtonName: "Start", HelpText: "Download"},
+				{ButtonName: "Select", HelpText: "Exit multi"},
+				{ButtonName: "B", HelpText: "Back"},
+			}
+		} else {
+			// X opens filters, Y opens search
+			opts.ActionButton = constants.VirtualButtonX
+			opts.SecondaryActionButton = constants.VirtualButtonY
+			opts.EmptyMessage = "No files match - press Y to change search"
+			opts.FooterHelpItems = []gaba.FooterHelpItem{
+				{ButtonName: "A", HelpText: "Download"},
+				{ButtonName: "X", HelpText: "Filters"},
+				{ButtonName: "Y", HelpText: "Search"},
+				{ButtonName: "Select", HelpText: "Multi"},
+				{ButtonName: "B", HelpText: "Back"},
+			}
 		}
 
 		res, err := gaba.List(opts)
 		if err != nil {
-			if errors.Is(err, gaba.ErrCancelled) {
-				return
+			if errors.Is(err, gaba.ErrCancelled) { // B
+				if multiMode {
+					multiMode = false // back one level: multi -> normal
+					selectedIndex = 0
+					continue
+				}
+				return // normal -> leave the item
 			}
 			logf("list error: %v", err)
 			return
 		}
 
 		switch res.Action {
-		case gaba.ListActionTriggered: // X = filters
+		case gaba.ListActionTertiaryTriggered: // Select = toggle multi-select
+			multiMode = !multiMode
+			selectedIndex = 0
+			continue
+		case gaba.ListActionTriggered: // X = filters (normal mode only)
 			filtersMenu(fs, files)
 			selectedIndex = 0
 			continue
-		case gaba.ListActionSecondaryTriggered: // Y = search
+		case gaba.ListActionSecondaryTriggered: // Y = search (normal mode only)
 			kb, kerr := gaba.Keyboard(search, "Search files (empty = show all)")
 			if kerr == nil && kb != nil {
 				search = kb.Text
@@ -112,7 +138,7 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 		}
 		selectedIndex = res.Selected[0]
 
-		// refresh row acts only when selected alone
+		// refresh row acts only when selected alone (normal mode)
 		if nControls == 1 && len(res.Selected) == 1 && res.Selected[0] == 0 {
 			fresh, ferr := loadItemFresh(cfg, id, platform)
 			if ferr != nil {
@@ -128,7 +154,7 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 			continue
 		}
 
-		// gather chosen files (skip the refresh row in a multi-select)
+		// gather chosen files (skip the refresh row)
 		var chosen []FileEntry
 		for _, idx := range res.Selected {
 			fi := idx - nControls
@@ -140,6 +166,7 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 			continue
 		}
 		downloadFiles(cfg, id, platform, chosen)
+		multiMode = false // return to normal browsing after a batch
 	}
 }
 
@@ -214,13 +241,15 @@ func pickKeepers(dest string, extracted []string) {
 		items[i] = gaba.MenuItem{Text: fmt.Sprintf("%s  [%s]", rel, humanSize(size))}
 	}
 	opts := gaba.DefaultListOptions("Archive had multiple files - tick what to KEEP", items)
+	// permanently multi-select: do NOT bind Select to a toggle here, or
+	// the user could turn the checkboxes off and be unable to pick.
 	opts.InitialMultiSelectMode = true
-	opts.MultiSelectButton = constants.VirtualButtonSelect
 	opts.MultiSelectConfirmButton = constants.VirtualButtonStart
 	opts.SelectAllButton = constants.VirtualButtonL1
 	opts.DeselectAllButton = constants.VirtualButtonR1
 	opts.FooterHelpItems = []gaba.FooterHelpItem{
 		{ButtonName: "A", HelpText: "Tick"},
+		{ButtonName: "L1/R1", HelpText: "All/None"},
 		{ButtonName: "Start", HelpText: "Keep ticked, trash rest"},
 		{ButtonName: "B", HelpText: "Keep all"},
 	}
