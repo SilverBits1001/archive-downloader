@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +22,10 @@ type FileEntry struct {
 	Size int64  `json:"size"`
 	// Display is the pretty name (arcade mapping); empty means use Name.
 	Display string `json:"display,omitempty"`
+	// DirectURL, when set, is the exact URL to download this entry from
+	// (used for files peeked from inside a zip, which archive.org serves
+	// pre-extracted). Never cached. Empty means compute from id+Name.
+	DirectURL string `json:"-"`
 }
 
 func (f *FileEntry) Shown() string {
@@ -190,4 +196,69 @@ func downloadURL(id, name string) string {
 		segs[i] = url.PathEscape(s)
 	}
 	return "https://archive.org/download/" + url.PathEscape(id) + "/" + strings.Join(segs, "/")
+}
+
+// isPeekable reports whether we can list a file's contents server-side.
+// archive.org reliably unpacks .zip on the fly (trailing-slash listing);
+// 7z/rar aren't listable this way.
+func isPeekable(name string) bool {
+	return strings.EqualFold(filepath.Ext(name), ".zip")
+}
+
+var (
+	peekLinkRe = regexp.MustCompile(`<a href="([^"]+)">([^<]+)</a>`)
+	peekSizeRe = regexp.MustCompile(`id="size">(\d+)`)
+)
+
+// peekZip fetches archive.org's server-side listing of a zip's contents
+// and returns one FileEntry per inner file, each with a DirectURL that
+// downloads that file already extracted.
+func peekZip(id, zipName string, headers map[string]string) ([]FileEntry, error) {
+	listURL := downloadURL(id, zipName) + "/"
+	req, err := http.NewRequest(http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &httpStatusError{Code: resp.StatusCode}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, err
+	}
+	html := string(body)
+
+	var out []FileEntry
+	for _, row := range strings.Split(html, "<tr>") {
+		if !strings.Contains(row, `id="size"`) {
+			continue // not a file row
+		}
+		lm := peekLinkRe.FindStringSubmatch(row)
+		if lm == nil {
+			continue // directory row (no link)
+		}
+		href, name := lm[1], lm[2]
+		if strings.HasPrefix(href, "//") {
+			href = "https:" + href
+		} else if strings.HasPrefix(href, "/") {
+			href = "https://archive.org" + href
+		}
+		var size int64
+		if sm := peekSizeRe.FindStringSubmatch(row); sm != nil {
+			size, _ = strconv.ParseInt(sm[1], 10, 64)
+		}
+		out = append(out, FileEntry{Name: name, Size: size, DirectURL: href})
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no files found inside archive")
+	}
+	return out, nil
 }

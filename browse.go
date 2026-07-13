@@ -165,8 +165,73 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 		if len(chosen) == 0 {
 			continue
 		}
+		// single zip in normal mode -> peek inside and pick contents,
+		// so you can grab just the ROM you want, already extracted
+		if !multiMode && len(chosen) == 1 && isPeekable(chosen[0].Name) {
+			peekAndDownload(cfg, id, platform, chosen[0])
+			continue
+		}
 		downloadFiles(cfg, id, platform, chosen)
 		multiMode = false // return to normal browsing after a batch
+	}
+}
+
+// peekAndDownload lists a zip's contents server-side and lets the user
+// tick which inner files to download (already extracted). Falls back to
+// downloading the whole zip if the listing can't be fetched.
+func peekAndDownload(cfg *Config, id string, platform *Platform, zipFile FileEntry) {
+	base := filepath.Base(zipFile.Shown())
+	inner, err := gaba.ProcessMessage("Looking inside...\n"+base,
+		gaba.ProcessMessageOptions{ShowThemeBackground: true},
+		func() ([]FileEntry, error) {
+			return peekZip(id, zipFile.Name, cfg.AuthHeaders())
+		})
+	if err != nil || len(inner) == 0 {
+		logf("peek failed for %s: %v (downloading whole zip)", zipFile.Name, err)
+		showInfo("Can't preview this archive.\nDownloading the whole file instead.")
+		downloadFiles(cfg, id, platform, []FileEntry{zipFile})
+		return
+	}
+	// a zip with a single file inside: just grab it, no picker needed
+	if len(inner) == 1 {
+		downloadFiles(cfg, id, platform, inner)
+		return
+	}
+
+	selectedIndex := 0
+	for {
+		items := make([]gaba.MenuItem, len(inner))
+		for i, f := range inner {
+			items[i] = gaba.MenuItem{Text: fmt.Sprintf("%s  [%s]", f.Name, humanSize(f.Size))}
+		}
+		opts := gaba.DefaultListOptions(fmt.Sprintf("Inside %s (%d files)", base, len(inner)), items)
+		opts.SelectedIndex = selectedIndex
+		opts.InitialMultiSelectMode = true
+		opts.MultiSelectConfirmButton = constants.VirtualButtonStart
+		opts.SelectAllButton = constants.VirtualButtonL1
+		opts.DeselectAllButton = constants.VirtualButtonR1
+		opts.FooterHelpItems = []gaba.FooterHelpItem{
+			{ButtonName: "A", HelpText: "Select"},
+			{ButtonName: "L1/R1", HelpText: "All/None"},
+			{ButtonName: "Start", HelpText: "Download picked"},
+			{ButtonName: "B", HelpText: "Cancel"},
+		}
+		res, err := gaba.List(opts)
+		if err != nil || len(res.Selected) == 0 {
+			return
+		}
+		selectedIndex = res.Selected[0]
+		var chosen []FileEntry
+		for _, idx := range res.Selected {
+			if idx >= 0 && idx < len(inner) {
+				chosen = append(chosen, inner[idx])
+			}
+		}
+		if len(chosen) == 0 {
+			continue
+		}
+		downloadFiles(cfg, id, platform, chosen)
+		return
 	}
 }
 
@@ -305,8 +370,12 @@ func downloadFiles(cfg *Config, id string, platform *Platform, chosen []FileEntr
 
 	var downloads []gaba.Download
 	for _, f := range chosen {
+		url := f.DirectURL // set for files peeked from inside a zip
+		if url == "" {
+			url = downloadURL(id, f.Name)
+		}
 		downloads = append(downloads, gaba.Download{
-			URL:         downloadURL(id, f.Name),
+			URL:         url,
 			Location:    filepath.Join(dest, filepath.Base(f.Name)),
 			DisplayName: filepath.Base(f.Shown()),
 			Timeout:     2 * time.Hour,
