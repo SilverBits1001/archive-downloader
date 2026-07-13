@@ -12,15 +12,41 @@ import (
 type filterState struct {
 	Include []string
 	Exclude []string
+	// Suggested holds config-declared filter patterns: they appear in
+	// the filter menu as ready-made toggles but start OFF, so the full
+	// file list always shows by default.
+	Suggested []string
 }
 
 func newFilterState(p *Platform) *filterState {
 	fs := &filterState{}
 	if p != nil {
-		fs.Include = append(fs.Include, p.Filters.Inclusive...)
-		fs.Exclude = append(fs.Exclude, p.Filters.Exclusive...)
+		fs.Suggested = append(fs.Suggested, p.Filters.Inclusive...)
+		fs.Suggested = append(fs.Suggested, p.Filters.Exclusive...)
 	}
 	return fs
+}
+
+// menuTags returns the tags to offer in the filter menu: config
+// suggestions first, then tags extracted from the filenames (deduped).
+func menuTags(fs *filterState, files []FileEntry) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range fs.Suggested {
+		lc := strings.ToLower(s)
+		if !seen[lc] {
+			seen[lc] = true
+			out = append(out, s)
+		}
+	}
+	for _, t := range extractTags(files) {
+		lc := strings.ToLower(t)
+		if !seen[lc] {
+			seen[lc] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func containsFold(haystack, needle string) bool {

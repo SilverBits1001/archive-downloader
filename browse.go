@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
+	"github.com/BrandonKowalski/gabagool/v2/pkg/gabagool/constants"
 	"go.uber.org/atomic"
 )
 
@@ -43,39 +44,41 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 
 	for {
 		visible := applySearch(fs.apply(files), search)
+		filtered := len(visible) != len(files)
 
-		// pinned control rows, then one row per file
-		type rowRef struct{ file *FileEntry }
-		var rows []rowRef
+		// one optional pinned row (refresh), then one row per file
 		var items []gaba.MenuItem
-
-		addControl := func(text string) {
-			rows = append(rows, rowRef{})
-			items = append(items, gaba.MenuItem{Text: text, NotMultiSelectable: true})
-		}
-		if search != "" {
-			addControl(fmt.Sprintf(">> Search: %s  (%d of %d)", search, len(visible), len(files)))
-		} else {
-			addControl(fmt.Sprintf(">> Search  (%d files)", len(files)))
-		}
-		addControl(">> Filters")
+		nControls := 0
 		if fromCache {
-			addControl(">> Refresh file list  (cached)")
+			items = append(items, gaba.MenuItem{Text: ">> Refresh file list  (cached)", NotMultiSelectable: true})
+			nControls = 1
 		}
-		nControls := len(items)
 		for i := range visible {
 			f := &visible[i]
-			rows = append(rows, rowRef{file: f})
 			items = append(items, gaba.MenuItem{
 				Text: fmt.Sprintf("%s  [%s]", f.Shown(), humanSize(f.Size)),
 			})
 		}
 
-		opts := gaba.DefaultListOptions(id, items)
+		title := id
+		if filtered {
+			title = fmt.Sprintf("%s  (%d of %d)", id, len(visible), len(files))
+		}
+		opts := gaba.DefaultListOptions(title, items)
 		opts.SelectedIndex = selectedIndex
-		opts.EmptyMessage = "No files to show"
+		opts.EmptyMessage = "No files match - press Y to change search"
+		// X opens filters, Y opens search, Select toggles multi-select,
+		// Start confirms the multi-selection as a download queue
+		opts.ActionButton = constants.VirtualButtonX
+		opts.SecondaryActionButton = constants.VirtualButtonY
+		opts.MultiSelectButton = constants.VirtualButtonSelect
+		opts.MultiSelectConfirmButton = constants.VirtualButtonStart
+		opts.SelectAllButton = constants.VirtualButtonL1
+		opts.DeselectAllButton = constants.VirtualButtonR1
 		opts.FooterHelpItems = []gaba.FooterHelpItem{
 			{ButtonName: "A", HelpText: "Download"},
+			{ButtonName: "X", HelpText: "Filters"},
+			{ButtonName: "Y", HelpText: "Search"},
 			{ButtonName: "Select", HelpText: "Multi"},
 			{ButtonName: "B", HelpText: "Back"},
 		}
@@ -88,44 +91,48 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 			logf("list error: %v", err)
 			return
 		}
-		if len(res.Selected) == 0 {
-			return
-		}
-		selectedIndex = res.Selected[0]
 
-		// control rows only act when selected alone
-		if len(res.Selected) == 1 && res.Selected[0] < nControls {
-			switch res.Selected[0] {
-			case 0: // search
-				kb, err := gaba.Keyboard(search, "Search files (empty = show all)")
-				if err == nil && kb != nil {
-					search = kb.Text
-					selectedIndex = 0
-				}
-			case 1: // filters
-				filtersMenu(fs, files)
+		switch res.Action {
+		case gaba.ListActionTriggered: // X = filters
+			filtersMenu(fs, files)
+			selectedIndex = 0
+			continue
+		case gaba.ListActionSecondaryTriggered: // Y = search
+			kb, kerr := gaba.Keyboard(search, "Search files (empty = show all)")
+			if kerr == nil && kb != nil {
+				search = kb.Text
 				selectedIndex = 0
-			case 2: // refresh
-				fresh, err := loadItemFresh(cfg, id, platform)
-				if err != nil {
-					showError("Couldn't refresh the list.\nStill using the cached copy.")
-				} else {
-					files = fresh
-					if platform != nil && platform.IsArcade {
-						applyArcadeNames(files, loadArcadeNames())
-					}
-					fromCache = false
-					selectedIndex = 0
-				}
 			}
 			continue
 		}
 
-		// gather chosen files (ignore any control rows in a multi-select)
+		if len(res.Selected) == 0 {
+			continue
+		}
+		selectedIndex = res.Selected[0]
+
+		// refresh row acts only when selected alone
+		if nControls == 1 && len(res.Selected) == 1 && res.Selected[0] == 0 {
+			fresh, ferr := loadItemFresh(cfg, id, platform)
+			if ferr != nil {
+				showError("Couldn't refresh the list.\nStill using the cached copy.")
+			} else {
+				files = fresh
+				if platform != nil && platform.IsArcade {
+					applyArcadeNames(files, loadArcadeNames())
+				}
+				fromCache = false
+				selectedIndex = 0
+			}
+			continue
+		}
+
+		// gather chosen files (skip the refresh row in a multi-select)
 		var chosen []FileEntry
 		for _, idx := range res.Selected {
-			if idx >= nControls && rows[idx].file != nil {
-				chosen = append(chosen, *rows[idx].file)
+			fi := idx - nControls
+			if fi >= 0 && fi < len(visible) {
+				chosen = append(chosen, visible[fi])
 			}
 		}
 		if len(chosen) == 0 {
@@ -152,8 +159,9 @@ func loadItemFresh(cfg *Config, id string, platform *Platform) ([]FileEntry, err
 }
 
 // filtersMenu lets the user cycle tags none -> [+] -> [-] -> none.
+// Config-declared filters show up as suggestions, OFF until toggled.
 func filtersMenu(fs *filterState, files []FileEntry) {
-	tags := extractTags(files)
+	tags := menuTags(fs, files)
 	if len(tags) == 0 {
 		showInfo("No filter tags found in these files.")
 		return
