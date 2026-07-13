@@ -43,104 +43,112 @@ func writeEntry(dest string, r io.Reader, mode os.FileMode) error {
 	return err
 }
 
-func extractZip(src, dir string) error {
+func extractZip(src, dir string) ([]string, error) {
 	zr, err := zip.OpenReader(src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer zr.Close()
+	var written []string
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 		dest, err := safeJoin(dir, f.Name)
 		if err != nil {
-			return err
+			return written, err
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return err
+			return written, err
 		}
 		err = writeEntry(dest, rc, f.Mode())
 		rc.Close()
 		if err != nil {
-			return err
+			return written, err
 		}
+		written = append(written, dest)
 	}
-	return nil
+	return written, nil
 }
 
-func extract7z(src, dir string) error {
+func extract7z(src, dir string) ([]string, error) {
 	r, err := sevenzip.OpenReader(src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer r.Close()
+	var written []string
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 		dest, err := safeJoin(dir, f.Name)
 		if err != nil {
-			return err
+			return written, err
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return err
+			return written, err
 		}
 		err = writeEntry(dest, rc, f.Mode())
 		rc.Close()
 		if err != nil {
-			return err
+			return written, err
 		}
+		written = append(written, dest)
 	}
-	return nil
+	return written, nil
 }
 
-func extractRar(src, dir string) error {
+func extractRar(src, dir string) ([]string, error) {
 	rr, err := rardecode.OpenReader(src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rr.Close()
+	var written []string
 	for {
 		hdr, err := rr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return written, nil
 		}
 		if err != nil {
-			return err
+			return written, err
 		}
 		if hdr.IsDir {
 			continue
 		}
 		dest, err := safeJoin(dir, hdr.Name)
 		if err != nil {
-			return err
+			return written, err
 		}
 		if err := writeEntry(dest, rr, 0644); err != nil {
-			return err
+			return written, err
 		}
+		written = append(written, dest)
 	}
 }
 
-// extractArchive extracts src into dir and deletes src on success.
-func extractArchive(src, dir string) error {
+// extractArchive extracts src into dir, deletes src on success, and
+// returns the files it wrote.
+func extractArchive(src, dir string) ([]string, error) {
+	var files []string
 	var err error
 	switch strings.ToLower(filepath.Ext(src)) {
 	case ".zip":
-		err = extractZip(src, dir)
+		files, err = extractZip(src, dir)
 	case ".7z":
-		err = extract7z(src, dir)
+		files, err = extract7z(src, dir)
 	case ".rar":
-		err = extractRar(src, dir)
+		files, err = extractRar(src, dir)
 	default:
-		return nil
+		return nil, nil
 	}
 	if err != nil {
 		logf("extraction failed for %s: %v", src, err)
-		return err
+		return files, err
 	}
-	logf("extracted and removed %s", src)
-	return os.Remove(src)
+	logf("extracted %d file(s) and removed %s", len(files), src)
+	return files, os.Remove(src)
 }

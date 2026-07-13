@@ -1,6 +1,6 @@
 {
   "name": "Archive Downloader",
-  "version": "v2.1.0",
+  "version": "v2.2.0",
   "type": "TOOL",
   "description": "Download files from archive.org items directly to your SD card over WiFi. Native UI rewrite.",
   "author": "Corey",
@@ -9,6 +9,7 @@
   ],
   "launch": "launch.sh",
   "changelog": {
+    "v2.2.0": "Keeper picker: when one archive extracts multiple different files (e.g. several versions of a game), a list appears to tick which to KEEP - the rest are removed. Safe by design: B or confirming nothing keeps everything, cue/m3u/gdi playlists keep their referenced tracks automatically, same-name multi-part games (cue+bin) never prompt, and only files from that extraction can be touched.",
     "v2.1.0": "Filters are OFF by default - config filters now appear in the filter menu as toggles instead of silently trimming the list. X button opens filters, Y opens search directly. Multi-select actually enabled (Select toggles, Start downloads the queue, L1/R1 select/deselect all). Partial files removed when a download is cancelled.",
     "v2.0.0": "Complete rewrite in Go using the gabagool UI library (same UI stack as Pak Store): native list UI with automatic scrolling for long filenames, multi-select download queue with per-file progress and speed, no more screen flashing, built-in zip/7z/rar extraction, single binary replaces curl/jq/yq/7zz/minui tools. All v1.3 features ported: config.yml platforms, per-platform filters and extraction rules, on-device filter menu, search, cached file lists, favorites, arcade name mapping, archive.org login."
   }

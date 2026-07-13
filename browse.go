@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	gaba "github.com/BrandonKowalski/gabagool/v2/pkg/gabagool"
@@ -192,6 +193,78 @@ func filtersMenu(fs *filterState, files []FileEntry) {
 	}
 }
 
+// pickKeepers runs when one archive extracted several unrelated files
+// (usually multiple versions of a game): the user ticks what to KEEP
+// and everything else from that extraction is removed. Cancelling, or
+// confirming with nothing ticked, keeps everything — deletion never
+// happens by accident, and only files from this extraction are touched.
+// Keeping a .cue/.m3u/.gdi playlist automatically keeps the data files
+// it references.
+func pickKeepers(dest string, extracted []string) {
+	items := make([]gaba.MenuItem, len(extracted))
+	for i, p := range extracted {
+		rel, rerr := filepath.Rel(dest, p)
+		if rerr != nil {
+			rel = filepath.Base(p)
+		}
+		var size int64
+		if st, serr := os.Stat(p); serr == nil {
+			size = st.Size()
+		}
+		items[i] = gaba.MenuItem{Text: fmt.Sprintf("%s  [%s]", rel, humanSize(size))}
+	}
+	opts := gaba.DefaultListOptions("Archive had multiple files - tick what to KEEP", items)
+	opts.InitialMultiSelectMode = true
+	opts.MultiSelectButton = constants.VirtualButtonSelect
+	opts.MultiSelectConfirmButton = constants.VirtualButtonStart
+	opts.SelectAllButton = constants.VirtualButtonL1
+	opts.DeselectAllButton = constants.VirtualButtonR1
+	opts.FooterHelpItems = []gaba.FooterHelpItem{
+		{ButtonName: "A", HelpText: "Tick"},
+		{ButtonName: "Start", HelpText: "Keep ticked, trash rest"},
+		{ButtonName: "B", HelpText: "Keep all"},
+	}
+	res, err := gaba.List(opts)
+	if err != nil || len(res.Selected) == 0 {
+		return // keep everything
+	}
+
+	keep := map[string]bool{}
+	var addKeep func(p string)
+	addKeep = func(p string) {
+		if keep[p] {
+			return
+		}
+		keep[p] = true
+		for _, ref := range referencedFiles(p) {
+			rp := filepath.Join(filepath.Dir(p), ref)
+			for _, e := range extracted {
+				if strings.EqualFold(e, rp) {
+					addKeep(e)
+				}
+			}
+		}
+	}
+	for _, idx := range res.Selected {
+		if idx >= 0 && idx < len(extracted) {
+			addKeep(extracted[idx])
+		}
+	}
+
+	removed := 0
+	for _, p := range extracted {
+		if !keep[p] {
+			if os.Remove(p) == nil {
+				removed++
+			}
+		}
+	}
+	logf("keeper pick: kept %d, removed %d", len(keep), removed)
+	if removed > 0 {
+		showInfo(fmt.Sprintf("Kept %d file(s),\nremoved %d.", len(keep), removed))
+	}
+}
+
 // downloadFiles queues the chosen files through gabagool's download
 // manager, then extracts archives where the platform settings allow.
 func downloadFiles(cfg *Config, id string, platform *Platform, chosen []FileEntry) {
@@ -230,6 +303,7 @@ func downloadFiles(cfg *Config, id string, platform *Platform, chosen []FileEntr
 	// extraction pass
 	extracted := 0
 	extractErrs := 0
+	var multiGroups [][]string // archives that produced several unrelated files
 	if platform == nil || platform.ShouldUnzip() {
 		var toExtract []gaba.Download
 		for _, d := range res.Completed {
@@ -243,16 +317,26 @@ func downloadFiles(cfg *Config, id string, platform *Platform, chosen []FileEntr
 				gaba.ProcessMessageOptions{ShowThemeBackground: true, ShowProgressBar: true, Progress: progress},
 				func() (int, error) {
 					for i, d := range toExtract {
-						if err := extractArchive(d.Location, dest); err != nil {
+						files, xerr := extractArchive(d.Location, dest)
+						if xerr != nil {
 							extractErrs++
 						} else {
 							extracted++
+							// several files with different names = probably
+							// multiple versions; offer to pick keepers.
+							// same-base groups (cue+bin etc.) are one game.
+							if len(files) > 1 && !allSameBase(files) {
+								multiGroups = append(multiGroups, files)
+							}
 						}
 						progress.Store(float64(i+1) / float64(len(toExtract)))
 					}
 					return 0, nil
 				})
 		}
+	}
+	for _, g := range multiGroups {
+		pickKeepers(dest, g)
 	}
 
 	msg := fmt.Sprintf("Done!\n%d file(s) downloaded to\n%s", len(res.Completed), filepath.Base(dest))
