@@ -1,0 +1,14 @@
+{
+  "name": "Archive Downloader",
+  "version": "v2.0.0",
+  "type": "TOOL",
+  "description": "Download files from archive.org items directly to your SD card over WiFi. Native UI rewrite.",
+  "author": "Corey",
+  "platforms": [
+    "tg5040"
+  ],
+  "launch": "launch.sh",
+  "changelog": {
+    "v2.0.0": "Complete rewrite in Go using the gabagool UI library (same UI stack as Pak Store): native list UI with automatic scrolling for long filenames, multi-select download queue with per-file progress and speed, no more screen flashing, built-in zip/7z/rar extraction, single binary replaces curl/jq/yq/7zz/minui tools. All v1.3 features ported: config.yml platforms, per-platform filters and extraction rules, on-device filter menu, search, cached file lists, favorites, arcade name mapping, archive.org login."
+  }
+}

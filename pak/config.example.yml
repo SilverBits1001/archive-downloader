@@ -1,0 +1,26 @@
+# Archive Downloader configuration
+# Copy to config.yml and edit. (Your existing v1.3 config.yml works as-is.)
+
+auth:
+  # S3-like API keys from https://archive.org/account/s3.php (optional)
+  access: ""
+  secret: ""
+  # or browser cookies from archive.org (optional)
+  logged_in_user: ""
+  logged_in_sig: ""
+
+# fallback for manual downloads when no platform folder applies
+default_destination: "/mnt/SDCARD/Downloads"
+
+hosts:
+  - display_name: "Internet Archive"
+    platforms:
+      - platform_name: "Example homebrew collection"
+        identifier: "some-item-identifier"      # or a full archive.org URL
+        system_tag: "SFC"                        # routes to Roms/... (SFC)
+        # local_directory: "/mnt/SDCARD/Custom"  # explicit override
+        # unzip: false                           # keep archives instead of extracting
+        # is_arcade: true                        # pretty arcade names; never extracted
+        filters:
+          inclusive_filters: []                  # e.g. ["(USA"]
+          exclusive_filters: []                  # e.g. ["(Demo)", "(Beta)"]

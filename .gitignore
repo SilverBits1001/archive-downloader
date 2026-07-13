@@ -1,0 +1,9 @@
+# never commit real credentials
+config.yml
+pak/config.yml
+
+# build outputs
+pak/archive-downloader
+out/
+build.log
+go.sum
