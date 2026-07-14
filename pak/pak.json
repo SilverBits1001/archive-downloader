@@ -1,6 +1,6 @@
 {
   "name": "Archive Downloader",
-  "version": "v2.4.0",
+  "version": "v2.5.0",
   "type": "TOOL",
   "description": "Download files from archive.org items directly to your SD card over WiFi. Native UI rewrite.",
   "author": "Corey",
@@ -9,6 +9,7 @@
   ],
   "launch": "launch.sh",
   "changelog": {
+    "v2.5.0": "Peek now works for .zip, .7z AND .rar - press A on any compressed file to preview its contents and pick exactly what to download (each arrives already extracted). Keeper picker buttons updated: A select, L1/R1 all/none, Start keeps selected, B discards all (with a confirm since it can't be undone).",
     "v2.4.0": "Peek inside zips: press A on a .zip and archive.org lists its contents so you can tick exactly which files to download - each comes down already extracted, straight into the ROM folder, no local unzip. Single-file zips download in one tap; multi-file zips show a picker; if a listing can't be fetched it falls back to grabbing the whole zip. No PC needed from browse to play.",
     "v2.3.0": "Multi-select now has its own footer: normal mode shows A Download / X Filters / Y Search / Select Multi / B Back; pressing Select switches to a clean multi-select footer (A Select / L1-R1 All-None / Start Download / Select Exit / B Back). Filters and search are locked out inside multi-select so ticks can't be lost by the list changing underneath. Fixed the keeper picker so Select can no longer disable its checkboxes.",
     "v2.2.0": "Keeper picker: when one archive extracts multiple different files (e.g. several versions of a game), a list appears to tick which to KEEP - the rest are removed. Safe by design: B or confirming nothing keeps everything, cue/m3u/gdi playlists keep their referenced tracks automatically, same-name multi-part games (cue+bin) never prompt, and only files from that extraction can be touched.",

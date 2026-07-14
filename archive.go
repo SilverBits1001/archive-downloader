@@ -199,10 +199,14 @@ func downloadURL(id, name string) string {
 }
 
 // isPeekable reports whether we can list a file's contents server-side.
-// archive.org reliably unpacks .zip on the fly (trailing-slash listing);
-// 7z/rar aren't listable this way.
+// archive.org unpacks zip, 7z and rar on the fly (trailing-slash
+// listing), so all three can be previewed before downloading.
 func isPeekable(name string) bool {
-	return strings.EqualFold(filepath.Ext(name), ".zip")
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".zip", ".7z", ".rar":
+		return true
+	}
+	return false
 }
 
 var (
@@ -210,11 +214,11 @@ var (
 	peekSizeRe = regexp.MustCompile(`id="size">(\d+)`)
 )
 
-// peekZip fetches archive.org's server-side listing of a zip's contents
-// and returns one FileEntry per inner file, each with a DirectURL that
-// downloads that file already extracted.
-func peekZip(id, zipName string, headers map[string]string) ([]FileEntry, error) {
-	listURL := downloadURL(id, zipName) + "/"
+// peekArchive fetches archive.org's server-side listing of an archive's
+// contents (zip/7z/rar) and returns one FileEntry per inner file, each
+// with a DirectURL that downloads that file already extracted.
+func peekArchive(id, archiveName string, headers map[string]string) ([]FileEntry, error) {
+	listURL := downloadURL(id, archiveName) + "/"
 	req, err := http.NewRequest(http.MethodGet, listURL, nil)
 	if err != nil {
 		return nil, err

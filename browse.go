@@ -165,8 +165,8 @@ func browseItem(cfg *Config, id string, platform *Platform) {
 		if len(chosen) == 0 {
 			continue
 		}
-		// single zip in normal mode -> peek inside and pick contents,
-		// so you can grab just the ROM you want, already extracted
+		// single compressed file in normal mode -> peek inside and pick
+		// contents, so you grab just the ROM you want, already extracted
 		if !multiMode && len(chosen) == 1 && isPeekable(chosen[0].Name) {
 			peekAndDownload(cfg, id, platform, chosen[0])
 			continue
@@ -184,7 +184,7 @@ func peekAndDownload(cfg *Config, id string, platform *Platform, zipFile FileEnt
 	inner, err := gaba.ProcessMessage("Looking inside...\n"+base,
 		gaba.ProcessMessageOptions{ShowThemeBackground: true},
 		func() ([]FileEntry, error) {
-			return peekZip(id, zipFile.Name, cfg.AuthHeaders())
+			return peekArchive(id, zipFile.Name, cfg.AuthHeaders())
 		})
 	if err != nil || len(inner) == 0 {
 		logf("peek failed for %s: %v (downloading whole zip)", zipFile.Name, err)
@@ -286,12 +286,12 @@ func filtersMenu(fs *filterState, files []FileEntry) {
 }
 
 // pickKeepers runs when one archive extracted several unrelated files
-// (usually multiple versions of a game): the user ticks what to KEEP
-// and everything else from that extraction is removed. Cancelling, or
-// confirming with nothing ticked, keeps everything — deletion never
-// happens by accident, and only files from this extraction are touched.
-// Keeping a .cue/.m3u/.gdi playlist automatically keeps the data files
-// it references.
+// (usually multiple versions of a game): the user ticks what to KEEP and
+// everything else from that extraction is removed.
+//   A: tick   L1/R1: all/none   Start: keep ticked (trash rest)
+//   B: discard ALL (with a confirm, since it's irreversible)
+// Only files from this extraction are ever touched, and keeping a
+// .cue/.m3u/.gdi playlist automatically keeps the data files it names.
 func pickKeepers(dest string, extracted []string) {
 	items := make([]gaba.MenuItem, len(extracted))
 	for i, p := range extracted {
@@ -305,57 +305,88 @@ func pickKeepers(dest string, extracted []string) {
 		}
 		items[i] = gaba.MenuItem{Text: fmt.Sprintf("%s  [%s]", rel, humanSize(size))}
 	}
-	opts := gaba.DefaultListOptions("Archive had multiple files - tick what to KEEP", items)
-	// permanently multi-select: do NOT bind Select to a toggle here, or
-	// the user could turn the checkboxes off and be unable to pick.
-	opts.InitialMultiSelectMode = true
-	opts.MultiSelectConfirmButton = constants.VirtualButtonStart
-	opts.SelectAllButton = constants.VirtualButtonL1
-	opts.DeselectAllButton = constants.VirtualButtonR1
-	opts.FooterHelpItems = []gaba.FooterHelpItem{
-		{ButtonName: "A", HelpText: "Tick"},
-		{ButtonName: "L1/R1", HelpText: "All/None"},
-		{ButtonName: "Start", HelpText: "Keep ticked, trash rest"},
-		{ButtonName: "B", HelpText: "Keep all"},
-	}
-	res, err := gaba.List(opts)
-	if err != nil || len(res.Selected) == 0 {
-		return // keep everything
-	}
 
-	keep := map[string]bool{}
-	var addKeep func(p string)
-	addKeep = func(p string) {
-		if keep[p] {
-			return
+	for {
+		opts := gaba.DefaultListOptions("Archive had multiple files - tick what to KEEP", items)
+		// permanently multi-select: do NOT bind Select to a toggle here,
+		// or the user could turn the checkboxes off and be stuck.
+		opts.InitialMultiSelectMode = true
+		opts.MultiSelectConfirmButton = constants.VirtualButtonStart
+		opts.SelectAllButton = constants.VirtualButtonL1
+		opts.DeselectAllButton = constants.VirtualButtonR1
+		opts.FooterHelpItems = []gaba.FooterHelpItem{
+			{ButtonName: "A", HelpText: "Select"},
+			{ButtonName: "L1/R1", HelpText: "All/None"},
+			{ButtonName: "Start", HelpText: "Keep selected"},
+			{ButtonName: "B", HelpText: "Discard all"},
 		}
-		keep[p] = true
-		for _, ref := range referencedFiles(p) {
-			rp := filepath.Join(filepath.Dir(p), ref)
-			for _, e := range extracted {
-				if strings.EqualFold(e, rp) {
-					addKeep(e)
+		res, err := gaba.List(opts)
+
+		if err != nil { // B = discard all (confirm first, it's destructive)
+			if !errors.Is(err, gaba.ErrCancelled) {
+				return
+			}
+			conf, _ := gaba.ConfirmationMessage(
+				fmt.Sprintf("Discard ALL %d extracted files?\nThis cannot be undone.", len(extracted)),
+				[]gaba.FooterHelpItem{
+					{ButtonName: "A", HelpText: "Discard all"},
+					{ButtonName: "B", HelpText: "Back"},
+				},
+				gaba.MessageOptions{})
+			if conf != nil && conf.Confirmed {
+				removed := 0
+				for _, p := range extracted {
+					if os.Remove(p) == nil {
+						removed++
+					}
+				}
+				logf("keeper: discarded all %d files", removed)
+				showInfo(fmt.Sprintf("Discarded all %d files.", removed))
+				return
+			}
+			continue // back to the picker
+		}
+
+		if len(res.Selected) == 0 {
+			// Start with nothing ticked: don't silently trash everything
+			showInfo("Nothing selected.\nTick files to keep, or press B\nto discard them all.")
+			continue
+		}
+
+		// keep ticked (plus playlist-referenced data files), trash rest
+		keep := map[string]bool{}
+		var addKeep func(p string)
+		addKeep = func(p string) {
+			if keep[p] {
+				return
+			}
+			keep[p] = true
+			for _, ref := range referencedFiles(p) {
+				rp := filepath.Join(filepath.Dir(p), ref)
+				for _, e := range extracted {
+					if strings.EqualFold(e, rp) {
+						addKeep(e)
+					}
 				}
 			}
 		}
-	}
-	for _, idx := range res.Selected {
-		if idx >= 0 && idx < len(extracted) {
-			addKeep(extracted[idx])
-		}
-	}
-
-	removed := 0
-	for _, p := range extracted {
-		if !keep[p] {
-			if os.Remove(p) == nil {
-				removed++
+		for _, idx := range res.Selected {
+			if idx >= 0 && idx < len(extracted) {
+				addKeep(extracted[idx])
 			}
 		}
-	}
-	logf("keeper pick: kept %d, removed %d", len(keep), removed)
-	if removed > 0 {
+
+		removed := 0
+		for _, p := range extracted {
+			if !keep[p] {
+				if os.Remove(p) == nil {
+					removed++
+				}
+			}
+		}
+		logf("keeper pick: kept %d, removed %d", len(keep), removed)
 		showInfo(fmt.Sprintf("Kept %d file(s),\nremoved %d.", len(keep), removed))
+		return
 	}
 }
 
